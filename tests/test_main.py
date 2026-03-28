@@ -1,4 +1,6 @@
-from mypackage.main import beep_boop
+"""Smoke test — importability."""
 
-def test_method() -> None:
-    assert beep_boop('Howdy') == 'H0wdy' 
+
+def test_package_importable() -> None:
+    import hcr_quick_viewer
+    assert hasattr(hcr_quick_viewer, "__version__")
