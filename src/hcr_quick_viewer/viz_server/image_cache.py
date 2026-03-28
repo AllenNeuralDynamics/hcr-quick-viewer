@@ -6,18 +6,26 @@ repeated views of the same plot don't re-download.
 
 from __future__ import annotations
 
+import io
 import threading
 
 import boto3
 from botocore.exceptions import ClientError
 from cachetools import LRUCache
+from PIL import Image
 
 _QC_S3_BUCKET: str = "aind-scratch-data"
 _QC_S3_PREFIX: str = "ctl/hcr/qc"
 
 _MAX_ENTRIES = 50
+_THUMB_MAX_ENTRIES = 200
+_THUMB_WIDTH = 200
+
 _lock = threading.RLock()
 _cache: LRUCache[str, bytes] = LRUCache(maxsize=_MAX_ENTRIES)
+
+_thumb_lock = threading.RLock()
+_thumb_cache: LRUCache[str, bytes] = LRUCache(maxsize=_THUMB_MAX_ENTRIES)
 
 
 def _cache_key(mouse_id: str, plot_type: str, fmt: str) -> str:
@@ -76,3 +84,48 @@ def clear() -> None:
     """Drop all cached entries."""
     with _lock:
         _cache.clear()
+    with _thumb_lock:
+        _thumb_cache.clear()
+
+
+def _make_thumbnail(png_bytes: bytes, max_width: int = _THUMB_WIDTH) -> bytes:
+    """Resize a PNG to *max_width* preserving aspect ratio."""
+    img = Image.open(io.BytesIO(png_bytes))
+    if img.width > max_width:
+        ratio = max_width / img.width
+        new_size = (max_width, int(img.height * ratio))
+        img = img.resize(new_size, Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
+
+
+def get_thumbnail_bytes(
+    mouse_id: str,
+    plot_type: str,
+    bucket: str = _QC_S3_BUCKET,
+    prefix: str = _QC_S3_PREFIX,
+    max_width: int = _THUMB_WIDTH,
+) -> bytes | None:
+    """Return a small PNG thumbnail, or ``None`` if the plot is missing.
+
+    Fetches the full PNG (via :func:`get_plot_bytes`) and resizes it.
+    Thumbnails are cached separately in a larger LRU cache.
+    """
+    key = f"thumb:{mouse_id}/{plot_type}:{max_width}"
+
+    with _thumb_lock:
+        cached = _thumb_cache.get(key)
+        if cached is not None:
+            return cached
+
+    full = get_plot_bytes(mouse_id, plot_type, fmt="png", bucket=bucket, prefix=prefix)
+    if full is None:
+        return None
+
+    thumb = _make_thumbnail(full, max_width=max_width)
+
+    with _thumb_lock:
+        _thumb_cache[key] = thumb
+
+    return thumb

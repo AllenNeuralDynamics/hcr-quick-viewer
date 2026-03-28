@@ -99,12 +99,29 @@ class SingleMouseTab(pn.viewable.Viewer):
                 link_row = pn.pane.HTML(
                     f'<span style="font-size:0.75em;color:#888">{links}</span>',
                 )
+
+                # Thumbnail preview
+                thumb_bytes = image_cache.get_thumbnail_bytes(self.mouse_id, pt)
+                if thumb_bytes:
+                    thumb_pane = pn.pane.PNG(
+                        object=BytesIO(thumb_bytes),
+                        width=180, height=120,
+                        sizing_mode="fixed",
+                        styles={"cursor": "pointer"},
+                    )
+                else:
+                    thumb_pane = pn.pane.HTML(
+                        '<div style="width:180px;height:120px;background:#eee;'
+                        'display:flex;align-items:center;justify-content:center;'
+                        'color:#bbb;font-size:0.8em">loading…</div>',
+                    )
+
                 btn = pn.widgets.Button(
                     name=f"View: {label}", button_type="light",
                     width=180, height=30,
                 )
                 btn.on_click(lambda event, _pt=pt: self._on_card_click(_pt))
-                card_content = pn.Column(header, link_row, btn, width=200)
+                card_content = pn.Column(header, thumb_pane, link_row, btn, width=200)
             else:
                 missing = pn.pane.HTML(
                     '<span style="font-size:0.75em;color:#999">not generated</span>',
@@ -114,7 +131,7 @@ class SingleMouseTab(pn.viewable.Viewer):
             card = pn.Card(
                 card_content,
                 width=210,
-                height=130,
+                height=250 if available else 100,
                 styles={"background": "#f9f9f9" if available else "#f0f0f0"},
                 hide_header=True,
             )
