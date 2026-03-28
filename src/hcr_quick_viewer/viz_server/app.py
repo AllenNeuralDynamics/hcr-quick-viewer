@@ -22,7 +22,38 @@ pn.extension(sizing_mode="stretch_width")
 single_mouse_tab = SingleMouseTab()
 compare_tab = CompareTab()
 
-# -- global controls -------------------------------------------------------
+# -- sidebar (swapped when tabs change) ------------------------------------
+
+sidebar_col = pn.Column(sizing_mode="stretch_width")
+
+
+def _populate_sidebar(tab_obj) -> None:
+    """Replace sidebar contents with the active tab's widgets."""
+    sidebar_col.objects = tab_obj.sidebar_widgets()
+
+
+# -- main content (swapped when tabs change) -------------------------------
+
+single_main = single_mouse_tab.main_area()
+compare_main = compare_tab.main_area()
+
+tabs = pn.Tabs(
+    ("Single Mouse", single_main),
+    ("Compare Mice", compare_main),
+    sizing_mode="stretch_both",
+    dynamic=True,
+)
+
+
+def _on_tab_change(event) -> None:
+    active = event.new
+    tab_obj = single_mouse_tab if active == 0 else compare_tab
+    _populate_sidebar(tab_obj)
+
+
+tabs.param.watch(_on_tab_change, "active")
+
+# -- refresh button --------------------------------------------------------
 
 refresh_btn = pn.widgets.Button(name="↺ Refresh", button_type="warning", width=100)
 
@@ -36,24 +67,20 @@ def _on_refresh(event) -> None:
 
 refresh_btn.on_click(_on_refresh)
 
-# -- header ----------------------------------------------------------------
+# -- template --------------------------------------------------------------
 
-header = pn.Row(
-    pn.pane.Markdown("# HCR QC Viewer", sizing_mode="stretch_width"),
-    refresh_btn,
-    sizing_mode="stretch_width",
-    styles={"padding": "5px 15px"},
+template = pn.template.FastListTemplate(
+    title="HCR QC Viewer",
+    sidebar=[sidebar_col],
+    main=[tabs],
+    header_background="#2b579a",
+    accent_base_color="#2b579a",
+    sidebar_width=260,
 )
 
-# -- main layout -----------------------------------------------------------
-
-tabs = pn.Tabs(
-    ("Single Mouse", single_mouse_tab),
-    ("Compare Mice", compare_tab),
-    sizing_mode="stretch_both",
-)
-
-layout = pn.Column(header, tabs, sizing_mode="stretch_both")
+# Refresh button in the sidebar header area
+sidebar_col.insert(0, refresh_btn)
+sidebar_col.insert(1, pn.layout.Divider())
 
 # -- initial load ----------------------------------------------------------
 
@@ -61,7 +88,7 @@ try:
     single_mouse_tab.reload()
     compare_tab.reload()
 except Exception as exc:
-    layout.append(
+    template.main.append(
         pn.pane.Alert(
             f"Failed to load catalog from S3: {exc}. "
             "Check AWS credentials and try the ↺ Refresh button.",
@@ -69,4 +96,6 @@ except Exception as exc:
         )
     )
 
-layout.servable(title="HCR QC Viewer")
+_populate_sidebar(single_mouse_tab)
+
+template.servable()

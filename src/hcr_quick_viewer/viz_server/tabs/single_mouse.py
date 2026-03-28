@@ -186,16 +186,19 @@ class SingleMouseTab(pn.viewable.Viewer):
             self._metadata_strip.object = ""
             self._metadata_details[0].object = {}
 
-    # -- layout ------------------------------------------------------------
+    # -- layout pieces for template integration ----------------------------
 
-    def __panel__(self):
-        sidebar = pn.Column(
+    def sidebar_widgets(self) -> list:
+        """Return widgets to place in the template sidebar."""
+        return [
             self._mouse_select,
             pn.layout.Divider(),
             self._format_radio,
-            width=230,
-        )
-        main_area = pn.Column(
+        ]
+
+    def main_area(self) -> pn.Column:
+        """Return the main content area."""
+        return pn.Column(
             self._plot_grid,
             pn.layout.Divider(),
             self._image_pane,
@@ -203,4 +206,10 @@ class SingleMouseTab(pn.viewable.Viewer):
             self._metadata_details,
             sizing_mode="stretch_width",
         )
-        return pn.Row(sidebar, main_area, sizing_mode="stretch_both")
+
+    def __panel__(self):
+        return pn.Row(
+            pn.Column(*self.sidebar_widgets(), width=230),
+            self.main_area(),
+            sizing_mode="stretch_both",
+        )
