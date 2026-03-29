@@ -100,4 +100,49 @@ except Exception as exc:
 
 _populate_sidebar(single_mouse_tab)
 
+# -- keyboard navigation --------------------------------------------------
+# Inject a JS keydown listener that finds the hidden IntInput (tagged
+# "hcr-keynav") and increments/decrements its value on arrow keys.
+# The Python-side param.watch callback picks up the change.
+
+_keynav_js = pn.pane.HTML("""
+<script>
+document.addEventListener("keydown", function(e) {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    // Don't hijack arrows when user is typing in an input
+    var tag = document.activeElement && document.activeElement.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
+    var docs = window.Bokeh && Bokeh.documents;
+    if (!docs || !docs.length) return;
+    var models = docs[0].roots();
+    for (var i = 0; i < models.length; i++) {
+        // Walk the model tree to find our tagged IntInput
+        var found = _findKeynav(models[i]);
+        if (found) {
+            if (e.key === "ArrowRight") found.value += 1;
+            else found.value -= 1;
+            e.preventDefault();
+            return;
+        }
+    }
+});
+function _findKeynav(model) {
+    if (model.tags && model.tags.indexOf("hcr-keynav") !== -1) return model;
+    if (model.children) {
+        for (var j = 0; j < model.children.length; j++) {
+            var c = Array.isArray(model.children[j])
+                ? model.children[j] : [model.children[j]];
+            for (var k = 0; k < c.length; k++) {
+                var r = _findKeynav(c[k]);
+                if (r) return r;
+            }
+        }
+    }
+    return null;
+}
+</script>
+""", width=0, height=0, sizing_mode="fixed", visible=False)
+template.main.append(_keynav_js)
+
 template.servable()
