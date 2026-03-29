@@ -14,6 +14,7 @@ import panel as pn
 from hcr_quick_viewer.viz_server import catalog, image_cache
 from hcr_quick_viewer.viz_server.tabs.single_mouse import SingleMouseTab
 from hcr_quick_viewer.viz_server.tabs.compare import CompareTab
+from hcr_quick_viewer.viz_server import theme
 
 pn.extension(sizing_mode="stretch_width")
 
@@ -75,7 +76,8 @@ template = pn.template.FastListTemplate(
     main=[tabs],
     header_background="#2b579a",
     accent_base_color="#2b579a",
-    sidebar_width=260,
+    sidebar_width=theme.SIDEBAR_WIDTH,
+    raw_css=theme.raw_css(),
 )
 
 # Refresh button in the sidebar header area

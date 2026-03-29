@@ -12,6 +12,7 @@ import panel as pn
 import param
 
 from hcr_quick_viewer.viz_server import catalog, image_cache
+from hcr_quick_viewer.viz_server.theme import FONT_SIZE
 
 
 class CompareTab(pn.viewable.Viewer):
@@ -118,7 +119,7 @@ class CompareTab(pn.viewable.Viewer):
 
             header = pn.pane.HTML(
                 f'<b>{mid}</b>',
-                styles={"font-size": "0.9em"},
+                styles={"font-size": FONT_SIZE["header"]},
             )
             card = pn.Card(
                 header, img,
@@ -189,7 +190,7 @@ class CompareTab(pn.viewable.Viewer):
 
     def __panel__(self):
         return pn.Row(
-            pn.Column(*self.sidebar_widgets(), width=230),
+            pn.Column(*self.sidebar_widgets(), width=300),
             self.main_area(),
             sizing_mode="stretch_both",
         )

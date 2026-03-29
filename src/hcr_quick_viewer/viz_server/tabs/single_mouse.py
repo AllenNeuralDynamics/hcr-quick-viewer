@@ -12,6 +12,7 @@ import panel as pn
 import param
 
 from hcr_quick_viewer.viz_server import catalog, image_cache
+from hcr_quick_viewer.viz_server.theme import FONT_SIZE
 
 
 class SingleMouseTab(pn.viewable.Viewer):
@@ -78,6 +79,10 @@ class SingleMouseTab(pn.viewable.Viewer):
         all_types = catalog.known_plot_types(cat)
         mouse_types = set(catalog.plot_types_for_mouse(cat, self.mouse_id))
 
+        # Prefetch all thumbnails in parallel
+        available_types = [pt for pt in all_types if pt in mouse_types]
+        thumbs = image_cache.prefetch_thumbnails(self.mouse_id, available_types)
+
         cards = []
         for pt in all_types:
             available = pt in mouse_types
@@ -87,7 +92,7 @@ class SingleMouseTab(pn.viewable.Viewer):
             label = pt.replace("_", " ")
             header = pn.pane.HTML(
                 f'<span style="color:{badge_color};font-weight:bold">{badge}</span> '
-                f'<span style="font-size:0.85em">{label}</span>',
+                f'<span style="font-size:{FONT_SIZE["card_label"]}">{label}</span>',
                 sizing_mode="stretch_width",
             )
 
@@ -97,41 +102,53 @@ class SingleMouseTab(pn.viewable.Viewer):
                 if has_pdf_flag:
                     links += " [PDF]"
                 link_row = pn.pane.HTML(
-                    f'<span style="font-size:0.75em;color:#888">{links}</span>',
+                    f'<span style="font-size:{FONT_SIZE["xs"]};color:#888">{links}</span>',
                 )
 
-                # Thumbnail preview
-                thumb_bytes = image_cache.get_thumbnail_bytes(self.mouse_id, pt)
+                # Thumbnail from prefetch cache
+                thumb_bytes = thumbs.get(pt)
                 if thumb_bytes:
                     thumb_pane = pn.pane.PNG(
                         object=BytesIO(thumb_bytes),
                         width=180, height=120,
                         sizing_mode="fixed",
-                        styles={"cursor": "pointer"},
                     )
                 else:
                     thumb_pane = pn.pane.HTML(
                         '<div style="width:180px;height:120px;background:#eee;'
                         'display:flex;align-items:center;justify-content:center;'
-                        'color:#bbb;font-size:0.8em">loading…</div>',
+                        f'color:#bbb;font-size:{FONT_SIZE["xs"]}">loading…</div>',
                     )
 
-                btn = pn.widgets.Button(
-                    name=f"View: {label}", button_type="light",
-                    width=180, height=30,
+                # Transparent click overlay on top of the thumbnail
+                click_btn = pn.widgets.Button(
+                    name="", width=190, height=130,
+                    button_type="light",
+                    stylesheets=[
+                        ":host { position: absolute; top: 0; left: 0; z-index: 1; }"
+                        ":host .bk-btn { background: transparent; border: none; "
+                        "cursor: pointer; width: 100%; height: 100%; }"
+                    ],
                 )
-                btn.on_click(lambda event, _pt=pt: self._on_card_click(_pt))
-                card_content = pn.Column(header, thumb_pane, link_row, btn, width=200)
+                click_btn.on_click(lambda event, _pt=pt: self._on_card_click(_pt))
+
+                thumb_wrapper = pn.Column(
+                    thumb_pane, click_btn,
+                    styles={"position": "relative"},
+                    width=200, height=130,
+                )
+
+                card_content = pn.Column(header, thumb_wrapper, link_row, width=200)
             else:
                 missing = pn.pane.HTML(
-                    '<span style="font-size:0.75em;color:#999">not generated</span>',
+                    f'<span style="font-size:{FONT_SIZE["xs"]};color:#999">not generated</span>',
                 )
                 card_content = pn.Column(header, missing, width=200)
 
             card = pn.Card(
                 card_content,
                 width=210,
-                height=250 if available else 100,
+                height=220 if available else 100,
                 styles={"background": "#f9f9f9" if available else "#f0f0f0"},
                 hide_header=True,
             )
@@ -209,7 +226,7 @@ class SingleMouseTab(pn.viewable.Viewer):
 
     def __panel__(self):
         return pn.Row(
-            pn.Column(*self.sidebar_widgets(), width=230),
+            pn.Column(*self.sidebar_widgets(), width=300),
             self.main_area(),
             sizing_mode="stretch_both",
         )

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import boto3
 from botocore.exceptions import ClientError
@@ -129,3 +130,44 @@ def get_thumbnail_bytes(
         _thumb_cache[key] = thumb
 
     return thumb
+
+
+def prefetch_thumbnails(
+    mouse_id: str,
+    plot_types: list[str],
+    *,
+    bucket: str = _QC_S3_BUCKET,
+    prefix: str = _QC_S3_PREFIX,
+    max_width: int = _THUMB_WIDTH,
+    max_workers: int = 8,
+) -> dict[str, bytes | None]:
+    """Fetch thumbnails for *plot_types* in parallel.
+
+    Returns a ``{plot_type: thumb_bytes_or_None}`` dict.  Already-cached
+    thumbnails are returned immediately; only cache misses hit S3.
+    """
+    results: dict[str, bytes | None] = {}
+    to_fetch: list[str] = []
+
+    for pt in plot_types:
+        key = f"thumb:{mouse_id}/{pt}:{max_width}"
+        with _thumb_lock:
+            cached = _thumb_cache.get(key)
+        if cached is not None:
+            results[pt] = cached
+        else:
+            to_fetch.append(pt)
+
+    if not to_fetch:
+        return results
+
+    def _fetch_one(pt: str) -> tuple[str, bytes | None]:
+        return pt, get_thumbnail_bytes(
+            mouse_id, pt, bucket=bucket, prefix=prefix, max_width=max_width,
+        )
+
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(to_fetch))) as pool:
+        for pt, thumb in pool.map(lambda p: _fetch_one(p), to_fetch):
+            results[pt] = thumb
+
+    return results
