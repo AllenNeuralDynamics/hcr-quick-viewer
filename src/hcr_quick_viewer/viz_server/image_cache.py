@@ -91,6 +91,10 @@ def clear() -> None:
 
 def _make_thumbnail(png_bytes: bytes, max_width: int = _THUMB_WIDTH) -> bytes:
     """Resize a PNG to *max_width* preserving aspect ratio."""
+    # Large plots (pairplots, taxonomy grids) can exceed PIL's default 178 MP
+    # decompression-bomb limit. Raise it to 600 MP — well above any matplotlib
+    # output — rather than disabling the check entirely.
+    Image.MAX_IMAGE_PIXELS = 600_000_000
     img = Image.open(io.BytesIO(png_bytes))
     if img.width > max_width:
         ratio = max_width / img.width

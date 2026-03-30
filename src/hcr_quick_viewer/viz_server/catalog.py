@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import os
 import threading
+import tomllib
+from pathlib import Path
 from typing import Any
 
 import boto3
@@ -25,6 +27,18 @@ _TTL_SECONDS = int(os.environ.get("QC_CATALOG_TTL_SECONDS", "300"))
 _lock = threading.RLock()
 _catalog_cache: TTLCache[str, pd.DataFrame] = TTLCache(maxsize=1, ttl=_TTL_SECONDS)
 _CACHE_KEY = "catalog"
+
+_CONFIG_PATH = Path(__file__).parent / "viewer_config.toml"
+
+
+def _load_excluded_plot_types() -> frozenset[str]:
+    """Return the set of plot types to hide, from viewer_config.toml."""
+    if not _CONFIG_PATH.exists():
+        return frozenset()
+    with open(_CONFIG_PATH, "rb") as f:
+        cfg = tomllib.load(f)
+    excluded = cfg.get("viewer", {}).get("excluded_plot_types", [])
+    return frozenset(excluded)
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +121,7 @@ def load_catalog(bucket: str = _QC_S3_BUCKET) -> pd.DataFrame:
     """Return the catalog DataFrame, refreshing from S3 if TTL expired.
 
     Columns: ``mouse_id``, ``plot_type``, ``s3_key``, ``has_pdf``.
+    Plot types listed in ``viewer_config.toml`` are excluded.
     """
     with _lock:
         cached = _catalog_cache.get(_CACHE_KEY)
@@ -115,6 +130,11 @@ def load_catalog(bucket: str = _QC_S3_BUCKET) -> pd.DataFrame:
 
         rows = _list_plots_from_s3(bucket=bucket)
         df = pd.DataFrame(rows, columns=["mouse_id", "plot_type", "s3_key", "has_pdf"])
+
+        excluded = _load_excluded_plot_types()
+        if excluded and not df.empty:
+            df = df[~df["plot_type"].isin(excluded)].reset_index(drop=True)
+
         _catalog_cache[_CACHE_KEY] = df
         return df
 

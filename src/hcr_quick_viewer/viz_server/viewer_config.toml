@@ -1,0 +1,12 @@
+# HCR Quick Viewer configuration
+#
+# excluded_plot_types
+#   Plot type names to hide from the viewer entirely.
+#   These plots still exist on S3 — they are just not shown in the UI.
+#   Useful for very large or slow-rendering plots that are better reviewed
+#   outside the viewer (e.g. pairplots with many genes).
+
+[viewer]
+excluded_plot_types = [
+    "spots_count_pairplot_all",
+]
