@@ -188,3 +188,23 @@ def has_pdf(catalog: pd.DataFrame, mouse_id: str, plot_type: str) -> bool:
 def load_plot_metadata(mouse_id: str, plot_type: str) -> dict | None:
     """Fetch the JSON sidecar for a plot."""
     return _load_metadata_from_s3(mouse_id, plot_type)
+
+
+def load_ng_links(mouse_id: str, bucket: str = _QC_S3_BUCKET) -> dict | None:
+    """Fetch the consolidated neuroglancer links JSON for a mouse.
+
+    Returns a dict with structure::
+
+        {"mouse_id": "...", "rounds": {"R1": [{"name": "...", "url": "..."}, ...], ...}}
+
+    Returns ``None`` if the file does not exist on S3.
+    """
+    s3 = boto3.client("s3")
+    key = f"{_QC_S3_PREFIX}/{mouse_id}/ng_links.json"
+    try:
+        resp = s3.get_object(Bucket=bucket, Key=key)
+        return json.loads(resp["Body"].read())
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] in ("404", "NoSuchKey"):
+            return None
+        raise

@@ -112,3 +112,83 @@ class TestRefresh:
         catalog.load_catalog()
         catalog.refresh()
         assert mock_list.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# load_ng_links
+# ---------------------------------------------------------------------------
+
+SAMPLE_NG_LINKS = {
+    "mouse_id": "782149",
+    "rounds": {
+        "R1": [
+            {"name": "fused_ng", "url": "https://neuroglancer-demo.appspot.com/#!s3://bucket/R1/fused_ng.json"},
+            {"name": "multichannel_spot_annotation_ng_link", "url": "https://neuroglancer-demo.appspot.com/#!s3://bucket/R1/spots.json"},
+        ],
+        "R2": [
+            {"name": "tile_subset_corrected_ng", "url": "https://neuroglancer-demo.appspot.com/#!s3://bucket/R2/tile.json"},
+        ],
+    },
+}
+
+
+class TestLoadNgLinks:
+    @patch("hcr_quick_viewer.viz_server.catalog.boto3")
+    def test_returns_parsed_dict(self, mock_boto3):
+        import json
+
+        fake_body = MagicMock()
+        fake_body.read.return_value = json.dumps(SAMPLE_NG_LINKS).encode()
+        mock_s3 = MagicMock()
+        mock_s3.get_object.return_value = {"Body": fake_body}
+        mock_boto3.client.return_value = mock_s3
+
+        result = catalog.load_ng_links("782149")
+        assert result["mouse_id"] == "782149"
+        assert "R1" in result["rounds"]
+        assert len(result["rounds"]["R1"]) == 2
+        assert result["rounds"]["R1"][0]["name"] == "fused_ng"
+
+    @patch("hcr_quick_viewer.viz_server.catalog.boto3")
+    def test_uses_correct_s3_key(self, mock_boto3):
+        import json
+
+        fake_body = MagicMock()
+        fake_body.read.return_value = json.dumps(SAMPLE_NG_LINKS).encode()
+        mock_s3 = MagicMock()
+        mock_s3.get_object.return_value = {"Body": fake_body}
+        mock_boto3.client.return_value = mock_s3
+
+        catalog.load_ng_links("782149")
+        call_kwargs = mock_s3.get_object.call_args
+        key = call_kwargs[1].get("Key") or call_kwargs[0][1]
+        assert "782149" in key
+        assert key.endswith("ng_links.json")
+
+    @patch("hcr_quick_viewer.viz_server.catalog.boto3")
+    def test_returns_none_on_404(self, mock_boto3):
+        from botocore.exceptions import ClientError
+
+        mock_s3 = MagicMock()
+        mock_s3.get_object.side_effect = ClientError(
+            {"Error": {"Code": "NoSuchKey", "Message": "not found"}},
+            "GetObject",
+        )
+        mock_boto3.client.return_value = mock_s3
+
+        result = catalog.load_ng_links("000000")
+        assert result is None
+
+    @patch("hcr_quick_viewer.viz_server.catalog.boto3")
+    def test_returns_none_on_404_code(self, mock_boto3):
+        from botocore.exceptions import ClientError
+
+        mock_s3 = MagicMock()
+        mock_s3.get_object.side_effect = ClientError(
+            {"Error": {"Code": "404", "Message": "not found"}},
+            "GetObject",
+        )
+        mock_boto3.client.return_value = mock_s3
+
+        result = catalog.load_ng_links("000000")
+        assert result is None

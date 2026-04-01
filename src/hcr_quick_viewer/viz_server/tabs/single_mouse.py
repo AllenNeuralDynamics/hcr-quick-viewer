@@ -45,6 +45,15 @@ class SingleMouseTab(pn.viewable.Viewer):
             sizing_mode="stretch_width",
         )
 
+        # -- neuroglancer links card --------------------------------------
+        self._ng_links_content = pn.pane.HTML("", sizing_mode="stretch_width")
+        self._ng_links_card = pn.Card(
+            self._ng_links_content,
+            title="Neuroglancer Links",
+            collapsed=True,
+            sizing_mode="stretch_width",
+        )
+
         # -- keyboard nav bridge ------------------------------------------
         # Hidden IntInput whose value is changed by JS keydown listener.
         # Odd increments = "next", even decrements = "prev".  We just watch
@@ -116,12 +125,14 @@ class SingleMouseTab(pn.viewable.Viewer):
             else:
                 # Trigger rebuild even if value didn't change
                 self._rebuild_grid()
+                self._rebuild_ng_links()
 
     # -- callbacks ---------------------------------------------------------
 
     def _on_mouse_change(self, event) -> None:
         self.mouse_id = event.new
         self._rebuild_grid()
+        self._rebuild_ng_links()
 
     def _on_format_change(self, event) -> None:
         self.fmt = event.new
@@ -152,6 +163,59 @@ class SingleMouseTab(pn.viewable.Viewer):
             idx = 0
         new_idx = (idx + direction) % len(self._available_plot_types)
         self._on_card_click(self._available_plot_types[new_idx])
+
+    def _rebuild_ng_links(self) -> None:
+        """Fetch and render the neuroglancer links table for the current mouse."""
+        data = catalog.load_ng_links(self.mouse_id)
+        if not data or not data.get("rounds"):
+            self._ng_links_content.object = (
+                '<span style="color:#999;font-style:italic">No neuroglancer links found.</span>'
+            )
+            return
+
+        rows_html = []
+        for round_label, links in sorted(data["rounds"].items()):
+            # Exclude cross-channel comparison links from the display
+            display_links = [lnk for lnk in links if not lnk["name"].startswith("cc_ng")]
+            if not display_links:
+                continue
+            for i, lnk in enumerate(display_links):
+                round_cell = (
+                    f'<td rowspan="{len(display_links)}" style="'
+                    'font-weight:bold;vertical-align:top;padding:4px 12px 4px 4px;'
+                    f'white-space:nowrap">{round_label}</td>'
+                    if i == 0
+                    else ""
+                )
+                name = lnk["name"].replace("_", " ")
+                url = lnk["url"]
+                rows_html.append(
+                    f"<tr>{round_cell}"
+                    f'<td style="padding:4px 12px">{name}</td>'
+                    f'<td style="padding:4px">'
+                    f'<a href="{url}" target="_blank" '
+                    f'style="color:#2b579a;text-decoration:none;font-weight:600">'
+                    f"Open ↗</a></td></tr>"
+                )
+
+        if not rows_html:
+            self._ng_links_content.object = (
+                '<span style="color:#999;font-style:italic">No neuroglancer links found.</span>'
+            )
+            return
+
+        table = (
+            '<table style="border-collapse:collapse;width:100%;'
+            f'font-size:{FONT_SIZE["sm"]}">'
+            '<thead><tr>'
+            '<th style="text-align:left;padding:4px 12px 4px 4px;border-bottom:1px solid #ddd">Round</th>'
+            '<th style="text-align:left;padding:4px 12px;border-bottom:1px solid #ddd">Link</th>'
+            '<th style="border-bottom:1px solid #ddd"></th>'
+            "</tr></thead><tbody>"
+            + "".join(rows_html)
+            + "</tbody></table>"
+        )
+        self._ng_links_content.object = table
 
     def _rebuild_grid(self) -> None:
         """Rebuild the plot-type card grid for the current mouse."""
@@ -314,6 +378,8 @@ class SingleMouseTab(pn.viewable.Viewer):
         """Return the main content area."""
         return pn.Column(
             self._plot_grid,
+            pn.layout.Divider(),
+            self._ng_links_card,
             pn.layout.Divider(),
             self._image_pane,
             self._metadata_strip,
