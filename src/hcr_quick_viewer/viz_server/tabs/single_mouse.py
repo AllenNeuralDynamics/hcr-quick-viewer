@@ -40,19 +40,13 @@ class SingleMouseTab(pn.viewable.Viewer):
         self._metadata_strip = pn.pane.Markdown("", sizing_mode="stretch_width")
         self._metadata_details = pn.Card(
             pn.pane.JSON({}, depth=3, name="sidecar"),
-            title="Details",
+            title="Plot Details",
             collapsed=True,
             sizing_mode="stretch_width",
         )
 
-        # -- neuroglancer links card --------------------------------------
+        # -- neuroglancer links content (lives in the NG tab) -------------
         self._ng_links_content = pn.pane.HTML("", sizing_mode="stretch_width")
-        self._ng_links_card = pn.Card(
-            self._ng_links_content,
-            title="Neuroglancer Links",
-            collapsed=True,
-            sizing_mode="stretch_width",
-        )
 
         # -- keyboard nav bridge ------------------------------------------
         # Hidden IntInput whose value is changed by JS keydown listener.
@@ -205,7 +199,7 @@ class SingleMouseTab(pn.viewable.Viewer):
             return
 
         table = (
-            '<table style="border-collapse:collapse;width:100%;'
+            '<table style="border-collapse:collapse;'
             f'font-size:{FONT_SIZE["sm"]}">'
             '<thead><tr>'
             '<th style="text-align:left;padding:4px 12px 4px 4px;border-bottom:1px solid #ddd">Round</th>'
@@ -246,14 +240,6 @@ class SingleMouseTab(pn.viewable.Viewer):
             )
 
             if available:
-                has_pdf_flag = catalog.has_pdf(cat, self.mouse_id, pt)
-                links = "[PNG]"
-                if has_pdf_flag:
-                    links += " [PDF]"
-                link_row = pn.pane.HTML(
-                    f'<span style="font-size:{FONT_SIZE["xs"]};color:#888">{links}</span>',
-                )
-
                 # Thumbnail from prefetch cache
                 thumb_bytes = thumbs.get(pt)
                 if thumb_bytes:
@@ -287,7 +273,7 @@ class SingleMouseTab(pn.viewable.Viewer):
                     width=200, height=130,
                 )
 
-                card_content = pn.Column(header, thumb_wrapper, link_row, width=200)
+                card_content = pn.Column(header, thumb_wrapper, width=200)
             else:
                 missing = pn.pane.HTML(
                     f'<span style="font-size:{FONT_SIZE["xs"]};color:#999">not generated</span>',
@@ -376,14 +362,28 @@ class SingleMouseTab(pn.viewable.Viewer):
 
     def main_area(self) -> pn.Column:
         """Return the main content area."""
-        return pn.Column(
+        thumbnails_card = pn.Card(
             self._plot_grid,
-            pn.layout.Divider(),
-            self._ng_links_card,
+            title="Thumbnails",
+            collapsed=False,
+            sizing_mode="stretch_width",
+        )
+        qc_plots_col = pn.Column(
+            thumbnails_card,
             pn.layout.Divider(),
             self._image_pane,
             self._metadata_strip,
             self._metadata_details,
+            sizing_mode="stretch_width",
+        )
+        inner_tabs = pn.Tabs(
+            ("QC Plots", qc_plots_col),
+            ("Neuroglancer Links", pn.Column(self._ng_links_content, sizing_mode="stretch_width")),
+            dynamic=True,
+            sizing_mode="stretch_width",
+        )
+        return pn.Column(
+            inner_tabs,
             sizing_mode="stretch_width",
         )
 
