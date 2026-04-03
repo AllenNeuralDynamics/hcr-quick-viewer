@@ -14,6 +14,7 @@ import panel as pn
 from hcr_quick_viewer.viz_server import catalog, image_cache
 from hcr_quick_viewer.viz_server.tabs.single_mouse import SingleMouseTab
 from hcr_quick_viewer.viz_server.tabs.compare import CompareTab
+from hcr_quick_viewer.viz_server.tabs.all_mice import AllMiceTab
 from hcr_quick_viewer.viz_server import theme
 
 pn.extension(sizing_mode="stretch_width")
@@ -22,6 +23,7 @@ pn.extension(sizing_mode="stretch_width")
 
 single_mouse_tab = SingleMouseTab()
 compare_tab = CompareTab()
+all_mice_tab = AllMiceTab()
 
 # -- sidebar (swapped when tabs change) ------------------------------------
 
@@ -37,10 +39,12 @@ def _populate_sidebar(tab_obj) -> None:
 
 single_main = single_mouse_tab.main_area()
 compare_main = compare_tab.main_area()
+all_mice_main = all_mice_tab.main_area()
 
 tabs = pn.Tabs(
     ("Single Mouse", single_main),
     ("Compare Mice", compare_main),
+    ("All Mice", all_mice_main),
     sizing_mode="stretch_both",
     dynamic=True,
 )
@@ -48,7 +52,12 @@ tabs = pn.Tabs(
 
 def _on_tab_change(event) -> None:
     active = event.new
-    tab_obj = single_mouse_tab if active == 0 else compare_tab
+    if active == 0:
+        tab_obj = single_mouse_tab
+    elif active == 1:
+        tab_obj = compare_tab
+    else:
+        tab_obj = all_mice_tab
     _populate_sidebar(tab_obj)
 
 
@@ -64,6 +73,7 @@ def _on_refresh(event) -> None:
     image_cache.clear()
     single_mouse_tab.reload()
     compare_tab.reload()
+    all_mice_tab.reload()
 
 
 refresh_btn.on_click(_on_refresh)
@@ -71,7 +81,7 @@ refresh_btn.on_click(_on_refresh)
 # -- template --------------------------------------------------------------
 
 template = pn.template.FastListTemplate(
-    title="HCR QC Viewer",
+    title="HCR Quick Viewer",
     sidebar=[sidebar_col],
     main=[tabs],
     header_background="#2b579a",
@@ -89,6 +99,7 @@ sidebar_col.insert(1, pn.layout.Divider())
 try:
     single_mouse_tab.reload()
     compare_tab.reload()
+    all_mice_tab.reload()
 except Exception as exc:
     template.main.append(
         pn.pane.Alert(
