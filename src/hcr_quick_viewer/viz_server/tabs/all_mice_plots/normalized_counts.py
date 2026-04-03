@@ -1,17 +1,9 @@
-"""All-mice plot #1 — Gene × Mouse intensity heatmap.
+"""All-mice plot #2 — Gene × Mouse normalized-counts heatmap.
 
-Self-contained: owns its own Panel widgets (metric selector, colormap,
-colour-range slider) and exposes two methods for the hosting tab to
-compose the layout:
-
-    plot.controls() → pn.Column   (place to the LEFT of the figure)
-    plot.plot_panel() → pn.Column (the live Bokeh figure pane)
-
-Square cells
-------------
-Cell size is fixed at CELL_PX × CELL_PX pixels.  Figure width and height
-are computed from the data shape so every cell is a true square regardless
-of how many mice or genes are present.
+Shows mean (or median) CPM-normalized spot counts per gene per mouse.
+Supports the same log₁₀ toggle, colormap, and colour-range controls as the
+intensity heatmap.  Follows the same controls()/plot_panel() contract so the
+AllMiceTab can swap it in without any layout changes.
 """
 
 from __future__ import annotations
@@ -30,21 +22,16 @@ from bokeh.palettes import Blues256, Inferno256, Plasma256, Viridis256
 from bokeh.plotting import figure
 from bokeh.transform import transform
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-CELL_PX = 20          # pixel size of each square heatmap cell
-LEFT_PAD = 90         # pixels reserved for gene name (y-axis) labels
-BOTTOM_PAD = 75       # pixels reserved for mouse ID (x-axis) labels
-TOP_PAD = 20          # top whitespace
-COLORBAR_PAD = 115    # pixels reserved for the colourbar on the right
+# Re-use the same cell-size constants as the intensity heatmap
+CELL_PX = 20
+LEFT_PAD = 90
+BOTTOM_PAD = 75
+TOP_PAD = 20
+COLORBAR_PAD = 115
 
 _METRIC_OPTIONS: dict[str, str] = {
-    "Mean intensity":   "mean_intensity",
-    "Median intensity": "median_intensity",
-    "Std intensity":    "std_intensity",
-    "N spots":          "n_spots",
+    "Mean normalized counts":   "mean_normalized_counts",
+    "Median normalized counts": "median_normalized_counts",
 }
 
 _PALETTE_OPTIONS: dict[str, list] = {
@@ -54,25 +41,19 @@ _PALETTE_OPTIONS: dict[str, list] = {
     "Blues":   list(reversed(Blues256)),
 }
 
-# Reverse lookup: column name → display label
 _METRIC_LABEL: dict[str, str] = {v: k for k, v in _METRIC_OPTIONS.items()}
 
 
-# ---------------------------------------------------------------------------
-# Plot class
-# ---------------------------------------------------------------------------
-
-class HeatmapPlot:
-    """Interactive gene × mouse intensity heatmap with inline controls."""
+class NormalizedCountsPlot:
+    """Interactive gene × mouse normalized-counts heatmap."""
 
     def __init__(self) -> None:
         self._df: pd.DataFrame = pd.DataFrame()
 
-        # -- widgets -------------------------------------------------------
         self._metric_select = pn.widgets.Select(
             name="Metric",
-            options=_METRIC_OPTIONS,   # dict: display label → column name
-            value="mean_intensity",
+            options=_METRIC_OPTIONS,
+            value="mean_normalized_counts",
             width=200,
         )
         self._palette_select = pn.widgets.Select(
@@ -83,9 +64,9 @@ class HeatmapPlot:
         )
         self._clim_slider = pn.widgets.RangeSlider(
             name="Color range",
-            start=0, end=10_000,
-            value=(0, 10_000),
-            step=10,
+            start=0, end=1_000,
+            value=(0, 1_000),
+            step=1,
             width=200,
         )
         self._reset_btn = pn.widgets.Button(
@@ -95,11 +76,9 @@ class HeatmapPlot:
             name="Log₁₀ scale", value=False, button_type="default", width=130,
         )
 
-        # -- live output containers ----------------------------------------
         self._status = pn.pane.Markdown("", sizing_mode="stretch_width")
         self._plot_pane = pn.Column(sizing_mode="stretch_width")
 
-        # -- wire callbacks ------------------------------------------------
         self._metric_select.param.watch(self._on_metric_change, "value")
         self._palette_select.param.watch(self._on_other_change, "value")
         self._clim_slider.param.watch(self._on_other_change, "value")
@@ -109,15 +88,18 @@ class HeatmapPlot:
     # -- public API --------------------------------------------------------
 
     def load(self, df: pd.DataFrame) -> None:
-        """Supply a new data frame and rebuild the figure."""
         self._df = df
         self._reset_clim_to_data()
         self._rebuild()
 
     def controls(self) -> pn.Column:
-        """Sidebar-style control column to place beside the figure."""
         return pn.Column(
             pn.pane.Markdown("### Controls", margin=(0, 0, 6, 0)),
+            pn.pane.Markdown(
+                "*Counts normalized to total spots per cell × 1000 (CPM-style)*",
+                styles={"font-size": "0.82rem", "color": "#666"},
+                margin=(0, 0, 8, 0),
+            ),
             self._metric_select,
             pn.layout.Divider(),
             self._palette_select,
@@ -132,11 +114,10 @@ class HeatmapPlot:
         )
 
     def plot_panel(self) -> pn.Column:
-        """Container that holds the live Bokeh figure."""
         return pn.Column(
             self._status,
             self._plot_pane,
-            scroll=True,            # horizontal scroll when figure exceeds viewport
+            scroll=True,
             sizing_mode="stretch_width",
         )
 
@@ -156,7 +137,7 @@ class HeatmapPlot:
     def _reset_clim_to_data(self) -> None:
         vmin, vmax = self._data_range()
         span = vmax - vmin if vmax > vmin else 1.0
-        step = max(0.1, round(span / 200, 1))
+        step = max(0.01, round(span / 200, 3))
         self._clim_slider.param.update(
             start=vmin, end=vmax, step=step, value=(vmin, vmax),
         )
@@ -174,7 +155,6 @@ class HeatmapPlot:
         self._reset_clim_to_data()
 
     def _on_log_change(self, event) -> None:
-        # Log toggle shifts the data range — reset clim then redraw
         self._reset_clim_to_data()
         self._rebuild()
 
@@ -185,9 +165,9 @@ class HeatmapPlot:
 
         if self._df.empty or metric not in self._df.columns:
             msg = (
-                "*No metrics found in `scratch/metrics/`. "
-                "Run `run_capsule.py` for each mouse to generate them.*"
-                if self._df.empty
+                "*No normalized-count metrics found. "
+                "Re-run `run_capsule.py` for each mouse to generate them.*"
+                if self._df.empty or "mean_normalized_counts" not in self._df.columns
                 else f"*Metric `{metric}` not yet present in the data.*"
             )
             self._status.object = msg
@@ -201,7 +181,6 @@ class HeatmapPlot:
         if vmax <= vmin:
             vmax = vmin + 1.0
 
-        # -- pivot ---------------------------------------------------------
         pivot = self._df.pivot_table(
             index="gene", columns="mouse_id", values=metric, aggfunc="mean"
         )
@@ -209,32 +188,30 @@ class HeatmapPlot:
         mice = sorted(pivot.columns.tolist())
         pivot = pivot.loc[genes, mice]
 
-        # Apply log10 transform if requested (display-only; stored values unchanged)
         if self._log_toggle.value:
-            pivot = np.log10(pivot.clip(lower=1e-9).where(pivot.notna()))
+            display_pivot = np.log10(pivot.clip(lower=1e-9).where(pivot.notna()))
+        else:
+            display_pivot = pivot
 
         df_melt = (
-            pivot.reset_index()
+            display_pivot.reset_index()
             .melt(id_vars="gene", var_name="mouse_id", value_name="value")
         )
-        # Hover shows original stored value with log annotation
-        raw_pivot = self._df.pivot(index="gene", columns="mouse_id", values=metric).loc[genes, mice]
         raw_melt = (
-            raw_pivot.reset_index()
+            pivot.reset_index()
             .melt(id_vars="gene", var_name="mouse_id", value_name="raw_value")
         )
         df_melt["raw_value"] = raw_melt["raw_value"]
         df_melt["value_str"] = df_melt.apply(
             lambda r: (
-                f"{r['raw_value']:,.1f} (log₁₀: {r['value']:.3f})"
+                f"{r['raw_value']:,.2f} (log₁₀: {r['value']:.3f})"
                 if self._log_toggle.value and pd.notna(r["raw_value"])
-                else (f"{r['raw_value']:,.1f}" if pd.notna(r["raw_value"]) else "N/A")
+                else (f"{r['raw_value']:,.2f}" if pd.notna(r["raw_value"]) else "N/A")
             ),
             axis=1,
         )
         source = ColumnDataSource(df_melt)
 
-        # -- colour mapper --------------------------------------------------
         mapper = LinearColorMapper(
             palette=palette,
             low=vmin,
@@ -242,7 +219,6 @@ class HeatmapPlot:
             nan_color="#e0e0e0",
         )
 
-        # -- figure with square cells (fixed pixel dimensions) -------------
         n_genes = len(genes)
         n_mice = len(mice)
         fig_h = n_genes * CELL_PX + BOTTOM_PAD + TOP_PAD
@@ -250,7 +226,7 @@ class HeatmapPlot:
 
         p = figure(
             x_range=mice,
-            y_range=list(reversed(genes)),   # alphabetical top-to-bottom
+            y_range=list(reversed(genes)),
             width=fig_w,
             height=fig_h,
             toolbar_location="right",
@@ -267,10 +243,10 @@ class HeatmapPlot:
             line_color=None,
         )
 
-        # -- hover tooltip -------------------------------------------------
         metric_label = _METRIC_LABEL.get(metric, metric)
         if self._log_toggle.value:
             metric_label = f"log₁₀({metric_label})"
+
         hover = p.select_one(HoverTool)
         hover.tooltips = [
             ("Mouse",      "@mouse_id"),
@@ -278,7 +254,6 @@ class HeatmapPlot:
             (metric_label, "@value_str"),
         ]
 
-        # -- colour bar ----------------------------------------------------
         color_bar = ColorBar(
             color_mapper=mapper,
             ticker=BasicTicker(desired_num_ticks=8),
@@ -292,9 +267,8 @@ class HeatmapPlot:
         )
         p.add_layout(color_bar, "right")
 
-        # -- axis styling --------------------------------------------------
         p.axis.major_label_text_font_size = "10px"
-        p.xaxis.major_label_orientation = 1.1   # ~63°
+        p.xaxis.major_label_orientation = 1.1
         p.xgrid.grid_line_color = None
         p.ygrid.grid_line_color = None
         p.background_fill_color = "#fafafa"

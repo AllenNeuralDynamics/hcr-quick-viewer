@@ -17,19 +17,28 @@ Adding a new plot
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
+import boto3
+from botocore.exceptions import ClientError
 import pandas as pd
 import panel as pn
 import param
 
 from hcr_quick_viewer.viz_server.tabs.all_mice_plots.heatmap import HeatmapPlot
+from hcr_quick_viewer.viz_server.tabs.all_mice_plots.normalized_counts import NormalizedCountsPlot
 
-METRICS_DIR = Path("/root/capsule/scratch/metrics")
+METRICS_S3_BUCKET: str = "aind-scratch-data"
+METRICS_S3_PREFIX: str = "ctl/hcr/qc/_metrics"
+
+# Known gene name corrections (typos in source data → canonical name).
+_GENE_ALIASES: dict[str, str] = {
+    "Slac17a7": "Slc17a7",
+}
 
 # Registry: sidebar display name → plot class
 _PLOT_REGISTRY: dict[str, type] = {
-    "Intensity Heatmap": HeatmapPlot,
+    "Intensity Heatmap":          HeatmapPlot,
+    "Normalized Counts Heatmap":  NormalizedCountsPlot,
 }
 
 
@@ -38,7 +47,7 @@ _PLOT_REGISTRY: dict[str, type] = {
 # ---------------------------------------------------------------------------
 
 def _load_all_metrics() -> pd.DataFrame:
-    """Read every ``*_metrics.json`` under METRICS_DIR and return a tidy frame.
+    """List every ``*_metrics.json`` under METRICS_S3_PREFIX and return a tidy frame.
 
     Columns: ``mouse_id``, ``gene``, ``mean_intensity``, ``median_intensity``,
     ``std_intensity``, ``n_spots``.
@@ -47,17 +56,29 @@ def _load_all_metrics() -> pd.DataFrame:
         columns=["mouse_id", "gene", "mean_intensity",
                  "median_intensity", "std_intensity", "n_spots"]
     )
-    if not METRICS_DIR.exists():
+    s3 = boto3.client("s3")
+    paginator = s3.get_paginator("list_objects_v2")
+
+    keys: list[str] = []
+    for page in paginator.paginate(Bucket=METRICS_S3_BUCKET, Prefix=METRICS_S3_PREFIX + "/"):
+        for obj in page.get("Contents", []):
+            if obj["Key"].endswith("_metrics.json"):
+                keys.append(obj["Key"])
+
+    if not keys:
         return _empty
 
     rows: list[dict] = []
-    for json_path in sorted(METRICS_DIR.glob("*_metrics.json")):
+    for key in sorted(keys):
         try:
-            data = json.loads(json_path.read_text())
+            resp = s3.get_object(Bucket=METRICS_S3_BUCKET, Key=key)
+            data = json.loads(resp["Body"].read())
         except Exception:
             continue
-        mouse_id = data.get("mouse_id", json_path.stem.replace("_metrics", ""))
+        stem = key.split("/")[-1]  # e.g. "755252_metrics.json"
+        mouse_id = data.get("mouse_id", stem.replace("_metrics.json", ""))
         for gene, vals in data.get("per_gene", {}).items():
+            gene = _GENE_ALIASES.get(gene, gene)
             rows.append({"mouse_id": mouse_id, "gene": gene, **vals})
 
     if not rows:
