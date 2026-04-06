@@ -175,3 +175,112 @@ def prefetch_thumbnails(
             results[pt] = thumb
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Round-level plot fetching
+# ---------------------------------------------------------------------------
+# Round plots live under a per-asset sub-folder:
+#   {prefix}/{mouse_id}/{asset_name}/{plot_type}.{ext}
+# These share the same LRU caches but use distinct cache keys so they never
+# collide with integrated (mouse-level) plot entries.
+# ---------------------------------------------------------------------------
+
+
+def get_round_plot_bytes(
+    mouse_id: str,
+    asset_name: str,
+    plot_type: str,
+    fmt: str = "png",
+    bucket: str = _QC_S3_BUCKET,
+    prefix: str = _QC_S3_PREFIX,
+) -> bytes | None:
+    """Return raw bytes for a round-level plot, or ``None`` if missing."""
+    key = f"round:{mouse_id}/{asset_name}/{plot_type}.{fmt}"
+
+    with _lock:
+        cached = _cache.get(key)
+        if cached is not None:
+            return cached
+
+    s3 = boto3.client("s3")
+    s3_key = f"{prefix}/{mouse_id}/{asset_name}/{plot_type}.{fmt}"
+    try:
+        resp = s3.get_object(Bucket=bucket, Key=s3_key)
+        data: bytes = resp["Body"].read()
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] in ("404", "NoSuchKey"):
+            return None
+        raise
+
+    with _lock:
+        _cache[key] = data
+    return data
+
+
+def get_round_thumbnail_bytes(
+    mouse_id: str,
+    asset_name: str,
+    plot_type: str,
+    bucket: str = _QC_S3_BUCKET,
+    prefix: str = _QC_S3_PREFIX,
+    max_width: int = _THUMB_WIDTH,
+) -> bytes | None:
+    """Return a thumbnail for a round-level plot, or ``None`` if missing."""
+    key = f"round_thumb:{max_width}/{mouse_id}/{asset_name}/{plot_type}"
+
+    with _thumb_lock:
+        cached = _thumb_cache.get(key)
+        if cached is not None:
+            return cached
+
+    png = get_round_plot_bytes(
+        mouse_id, asset_name, plot_type, fmt="png", bucket=bucket, prefix=prefix,
+    )
+    if png is None:
+        return None
+
+    thumb = _make_thumbnail(png, max_width=max_width)
+    with _thumb_lock:
+        _thumb_cache[key] = thumb
+    return thumb
+
+
+def prefetch_round_thumbnails(
+    mouse_id: str,
+    asset_name: str,
+    plot_types: list[str],
+    *,
+    bucket: str = _QC_S3_BUCKET,
+    prefix: str = _QC_S3_PREFIX,
+    max_width: int = _THUMB_WIDTH,
+    max_workers: int = 8,
+) -> dict[str, bytes | None]:
+    """Fetch round-level thumbnails for *plot_types* in parallel."""
+    results: dict[str, bytes | None] = {}
+    to_fetch: list[str] = []
+
+    for pt in plot_types:
+        key = f"round_thumb:{max_width}/{mouse_id}/{asset_name}/{pt}"
+        with _thumb_lock:
+            cached = _thumb_cache.get(key)
+        if cached is not None:
+            results[pt] = cached
+        else:
+            to_fetch.append(pt)
+
+    if not to_fetch:
+        return results
+
+    def _fetch_one(pt: str) -> tuple[str, bytes | None]:
+        return pt, get_round_thumbnail_bytes(
+            mouse_id, asset_name, pt,
+            bucket=bucket, prefix=prefix, max_width=max_width,
+        )
+
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(to_fetch))) as pool:
+        for pt, thumb in pool.map(lambda p: _fetch_one(p), to_fetch):
+            results[pt] = thumb
+
+    return results
+

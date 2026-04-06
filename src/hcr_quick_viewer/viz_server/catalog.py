@@ -68,9 +68,11 @@ def _list_plots_from_s3(
             if mouse_id.startswith("_"):
                 continue
 
-            # List objects in mouse folder
+            # List objects directly in the mouse folder (depth-1 only).
+            # Delimiter="/" prevents round sub-folder objects from bleeding
+            # into the integrated-plot catalog.
             all_keys: list[str] = []
-            plot_pages = paginator.paginate(Bucket=bucket, Prefix=mouse_prefix)
+            plot_pages = paginator.paginate(Bucket=bucket, Prefix=mouse_prefix, Delimiter="/")
             for ppage in plot_pages:
                 for obj in ppage.get("Contents", []):
                     all_keys.append(obj["Key"])
@@ -188,6 +190,65 @@ def has_pdf(catalog: pd.DataFrame, mouse_id: str, plot_type: str) -> bool:
 def load_plot_metadata(mouse_id: str, plot_type: str) -> dict | None:
     """Fetch the JSON sidecar for a plot."""
     return _load_metadata_from_s3(mouse_id, plot_type)
+
+
+def load_round_catalog(
+    mouse_id: str,
+    bucket: str = _QC_S3_BUCKET,
+) -> dict[str, list[str]]:
+    """Return round-level plot types for each asset sub-folder of *mouse_id*.
+
+    S3 structure::
+
+        {prefix}/{mouse_id}/{asset_name}/{plot_type}.png
+
+    Returns
+    -------
+    dict
+        ``{asset_name: [plot_type, ...]}`` ordered by asset_name.
+    """
+    s3 = boto3.client("s3")
+    paginator = s3.get_paginator("list_objects_v2")
+    mouse_prefix = f"{_QC_S3_PREFIX}/{mouse_id}/"
+
+    result: dict[str, list[str]] = {}
+
+    pages = paginator.paginate(Bucket=bucket, Prefix=mouse_prefix, Delimiter="/")
+    for page in pages:
+        for cp in page.get("CommonPrefixes", []):
+            asset_prefix = cp["Prefix"]
+            asset_name = asset_prefix.rstrip("/").split("/")[-1]
+
+            plot_types: list[str] = []
+            inner_pages = paginator.paginate(Bucket=bucket, Prefix=asset_prefix)
+            for inner_page in inner_pages:
+                for obj in inner_page.get("Contents", []):
+                    fname = obj["Key"].split("/")[-1]
+                    if fname.endswith(".png"):
+                        plot_types.append(fname[:-4])
+
+            if plot_types:
+                result[asset_name] = sorted(plot_types)
+
+    return dict(sorted(result.items()))
+
+
+def load_round_plot_metadata(
+    mouse_id: str,
+    asset_name: str,
+    plot_type: str,
+    bucket: str = _QC_S3_BUCKET,
+) -> dict | None:
+    """Fetch the JSON sidecar for a round-level plot."""
+    s3 = boto3.client("s3")
+    key = f"{_QC_S3_PREFIX}/{mouse_id}/{asset_name}/{plot_type}.json"
+    try:
+        resp = s3.get_object(Bucket=bucket, Key=key)
+        return json.loads(resp["Body"].read())
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] in ("404", "NoSuchKey"):
+            return None
+        raise
 
 
 def load_ng_links(mouse_id: str, bucket: str = _QC_S3_BUCKET) -> dict | None:

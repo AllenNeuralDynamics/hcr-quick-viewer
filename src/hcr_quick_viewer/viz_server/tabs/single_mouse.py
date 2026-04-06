@@ -48,6 +48,13 @@ class SingleMouseTab(pn.viewable.Viewer):
         # -- neuroglancer links content (lives in the NG tab) -------------
         self._ng_links_content = pn.pane.HTML("", sizing_mode="stretch_width")
 
+        # -- round plots state -------------------------------------------
+        self._rounds_main_col = pn.Column(sizing_mode="stretch_width")
+        self._round_full_img_pane = pn.pane.PNG(
+            object=None, sizing_mode="scale_width", max_width=1200,
+        )
+        self._round_meta_strip = pn.pane.Markdown("", sizing_mode="stretch_width")
+
         # -- keyboard nav bridge ------------------------------------------
         # Hidden IntInput whose value is changed by JS keydown listener.
         # Odd increments = "next", even decrements = "prev".  We just watch
@@ -120,6 +127,7 @@ class SingleMouseTab(pn.viewable.Viewer):
                 # Trigger rebuild even if value didn't change
                 self._rebuild_grid()
                 self._rebuild_ng_links()
+                self._rebuild_rounds_grid()
 
     # -- callbacks ---------------------------------------------------------
 
@@ -127,6 +135,7 @@ class SingleMouseTab(pn.viewable.Viewer):
         self.mouse_id = event.new
         self._rebuild_grid()
         self._rebuild_ng_links()
+        self._rebuild_rounds_grid()
 
     def _on_format_change(self, event) -> None:
         self.fmt = event.new
@@ -210,6 +219,277 @@ class SingleMouseTab(pn.viewable.Viewer):
             + "</tbody></table>"
         )
         self._ng_links_content.object = table
+
+    # ---- round-plots tab -----------------------------------------------
+
+    _ROUND_THUMB_PLOT = "tile_overview_ch405"
+
+    def _rebuild_rounds_grid(self) -> None:
+        """Build the top-level round card grid (one card per processed asset)."""
+        round_catalog = catalog.load_round_catalog(self.mouse_id)
+
+        if not round_catalog:
+            self._rounds_main_col.objects = [
+                pn.pane.HTML(
+                    '<span style="color:#999;font-style:italic">'
+                    "No round-specific QC plots found.</span>",
+                    sizing_mode="stretch_width",
+                )
+            ]
+            return
+
+        cards = []
+        for asset_name, plot_types in round_catalog.items():
+            # Load sidecar of the tile-overview plot to get round_label / gene info
+            thumb_plot = (
+                self._ROUND_THUMB_PLOT
+                if self._ROUND_THUMB_PLOT in plot_types
+                else plot_types[0]
+            )
+            meta = catalog.load_round_plot_metadata(
+                self.mouse_id, asset_name, thumb_plot
+            )
+            round_label = (meta or {}).get("round_label", "")
+            gene_dict = (meta or {}).get("gene_dict", {})
+
+            # Build a short display title from the acquisition date in the asset name
+            # e.g. HCR_755252_2025-07-10_13-00-00_processed_... → "R2: 2025-07-10"
+            parts = asset_name.split("_")
+            try:
+                acq_date = parts[2]          # YYYY-MM-DD
+                acq_time = parts[3].replace("-", ":")[:5]  # HH:MM
+                short_title = f"{acq_date}  {acq_time}"
+            except IndexError:
+                short_title = asset_name
+            display_title = f"{round_label}: {short_title}" if round_label else short_title
+
+            thumb_bytes = image_cache.get_round_thumbnail_bytes(
+                self.mouse_id, asset_name, thumb_plot
+            )
+            if thumb_bytes:
+                thumb_pane = pn.pane.PNG(
+                    object=BytesIO(thumb_bytes), width=180, height=140,
+                    sizing_mode="fixed",
+                )
+            else:
+                thumb_pane = pn.pane.HTML(
+                    '<div style="width:180px;height:140px;background:#dde;'
+                    'display:flex;align-items:center;justify-content:center;'
+                    f'color:#99a;font-size:{FONT_SIZE["xs"]}">no preview</div>',
+                )
+
+            click_btn = pn.widgets.Button(
+                name="", width=190, height=150, button_type="light",
+                stylesheets=[
+                    ":host { position: absolute; top: 0; left: 0; z-index: 1; }"
+                    ":host .bk-btn { background: transparent; border: none; "
+                    "cursor: pointer; width: 100%; height: 100%; }"
+                ],
+            )
+            click_btn.on_click(
+                lambda _e, _an=asset_name, _pts=plot_types:
+                    self._show_round_detail(_an, _pts)
+            )
+
+            thumb_wrapper = pn.Column(
+                thumb_pane, click_btn,
+                styles={"position": "relative"},
+                width=190, height=150,
+            )
+
+            header_html = pn.pane.HTML(
+                f'<div style="font-size:{FONT_SIZE["card_label"]};font-weight:600;'
+                f'padding:4px 2px;word-break:break-word">{display_title}</div>'
+                f'<div style="font-size:{FONT_SIZE["xs"]};color:#666;padding:0 2px 4px">'
+                f'{len(plot_types)} plot{"s" if len(plot_types) != 1 else ""}</div>',
+                sizing_mode="stretch_width",
+            )
+
+            # --- channel : gene footer (max 6 genes shown) ---
+            _CARD_HEIGHT = 430
+            if gene_dict:
+                sorted_genes = sorted(
+                    gene_dict.items(),
+                    key=lambda x: int(x[0]) if str(x[0]).isdigit() else 0,
+                )[:6]
+                gene_lines = "".join(
+                    f'<div style="display:flex;gap:6px;line-height:1.5">'
+                    f'<span style="min-width:36px;text-align:right;color:#555">{ch}</span>'
+                    f'<span style="color:#aaa">–</span>'
+                    f'<span style="color:#333">'
+                    f'{info.get("gene","") if isinstance(info,dict) else info}'
+                    f'</span></div>'
+                    for ch, info in sorted_genes
+                )
+                footer_html = pn.pane.HTML(
+                    f'<div style="padding:6px 4px 4px;border-top:1px solid #dde;margin-top:4px">'
+                    f'<div style="font-weight:700;font-size:{FONT_SIZE["xs"]};'
+                    f'margin-bottom:3px">{round_label}</div>'
+                    f'<div style="font-size:{FONT_SIZE["xs"]};font-family:monospace">'
+                    + gene_lines +
+                    f'</div></div>',
+                    sizing_mode="stretch_width",
+                )
+                card_body = pn.Column(header_html, thumb_wrapper, footer_html, width=200)
+            else:
+                card_body = pn.Column(header_html, thumb_wrapper, width=200)
+
+            card = pn.Card(
+                card_body,
+                width=210, height=_CARD_HEIGHT,
+                styles={"background": "#f4f4fb"},
+                hide_header=True,
+            )
+            cards.append(card)
+
+        grid = pn.FlexBox(*cards, flex_wrap="wrap", align_items="start", gap="12px")
+        self._rounds_main_col.objects = [grid]
+
+    def _show_round_detail(self, asset_name: str, plot_types: list[str]) -> None:
+        """Switch to the detail view for a specific round (all plots + full viewer)."""
+        # Prefetch thumbnails in parallel
+        thumbs = image_cache.prefetch_round_thumbnails(
+            self.mouse_id, asset_name, plot_types
+        )
+
+        # Load sidecar for metadata (prefer tile_overview)
+        thumb_plot = (
+            self._ROUND_THUMB_PLOT
+            if self._ROUND_THUMB_PLOT in plot_types
+            else plot_types[0]
+        )
+        meta = catalog.load_round_plot_metadata(self.mouse_id, asset_name, thumb_plot)
+
+        round_label = (meta or {}).get("round_label", "")
+        source_assets = (meta or {}).get("source_assets", {})
+        raw_name = source_assets.get("raw", "")
+        gene_dict = (meta or {}).get("gene_dict", {})
+
+        # --- channel:gene table ---
+        if gene_dict:
+            gene_rows = "".join(
+                f'<tr>'
+                f'<td style="padding:2px 14px 2px 4px;font-weight:600;color:#333">{ch} nm</td>'
+                f'<td style="padding:2px 4px;color:#555">'
+                f'{info.get("gene", "") if isinstance(info, dict) else info}</td>'
+                f'</tr>'
+                for ch, info in sorted(
+                    gene_dict.items(),
+                    key=lambda x: int(x[0]) if x[0].isdigit() else 0,
+                )
+            )
+            gene_table = (
+                f'<table style="border-collapse:collapse;font-size:{FONT_SIZE["sm"]};'
+                'margin:6px 0 10px">'
+                '<thead><tr>'
+                '<th style="text-align:left;padding:2px 14px 2px 4px;'
+                'border-bottom:1px solid #ddd">Channel</th>'
+                '<th style="text-align:left;padding:2px 4px;'
+                'border-bottom:1px solid #ddd">Gene</th>'
+                '</tr></thead><tbody>' + gene_rows + '</tbody></table>'
+            )
+        else:
+            gene_table = ""
+
+        title_text = f"{round_label}: {asset_name}" if round_label else asset_name
+        raw_line = (
+            f'<div style="font-size:{FONT_SIZE["xs"]};color:#666;margin-bottom:4px">'
+            f'Raw: <code style="font-size:0.85em">{raw_name}</code></div>'
+            if raw_name else ""
+        )
+        header_pane = pn.pane.HTML(
+            f'<h3 style="margin:0 0 2px;font-size:{FONT_SIZE["header"]}">{title_text}</h3>'
+            + raw_line + gene_table,
+            sizing_mode="stretch_width",
+        )
+
+        back_btn = pn.widgets.Button(
+            name="← Back to rounds", width=160, button_type="light"
+        )
+        back_btn.on_click(lambda _e: self._rebuild_rounds_grid())
+
+        # --- thumbnail grid ---
+        thumb_cards = []
+        for pt in plot_types:
+            label = pt.replace("_", " ")
+            thumb_bytes = thumbs.get(pt)
+
+            if thumb_bytes:
+                t_pane = pn.pane.PNG(
+                    object=BytesIO(thumb_bytes), width=180, height=130,
+                    sizing_mode="fixed",
+                )
+            else:
+                t_pane = pn.pane.HTML(
+                    '<div style="width:180px;height:130px;background:#eee;'
+                    'display:flex;align-items:center;justify-content:center;'
+                    f'color:#bbb;font-size:{FONT_SIZE["xs"]}">loading…</div>',
+                )
+
+            t_btn = pn.widgets.Button(
+                name="", width=190, height=140, button_type="light",
+                stylesheets=[
+                    ":host { position: absolute; top: 0; left: 0; z-index: 1; }"
+                    ":host .bk-btn { background: transparent; border: none; "
+                    "cursor: pointer; width: 100%; height: 100%; }"
+                ],
+            )
+            t_btn.on_click(
+                lambda _e, _an=asset_name, _pt=pt:
+                    self._show_round_plot(_an, _pt)
+            )
+            t_wrapper = pn.Column(
+                t_pane, t_btn,
+                styles={"position": "relative"},
+                width=190, height=140,
+            )
+            t_header = pn.pane.HTML(
+                f'<span style="font-size:{FONT_SIZE["xs"]};color:#444">{label}</span>',
+                sizing_mode="stretch_width",
+            )
+            thumb_cards.append(
+                pn.Card(
+                    pn.Column(t_header, t_wrapper, width=200),
+                    width=210, height=205,
+                    styles={"background": "#f9f9f9"},
+                    hide_header=True,
+                )
+            )
+
+        # Reset full-size viewer when entering detail view
+        self._round_full_img_pane.object = None
+        self._round_meta_strip.object = ""
+
+        self._rounds_main_col.objects = [
+            pn.Row(back_btn),
+            header_pane,
+            pn.layout.Divider(),
+            pn.FlexBox(*thumb_cards, flex_wrap="wrap", align_items="start", gap="10px"),
+            pn.layout.Divider(),
+            self._round_full_img_pane,
+            self._round_meta_strip,
+        ]
+
+    def _show_round_plot(self, asset_name: str, plot_type: str) -> None:
+        """Load and display a full-size round-level plot."""
+        data = image_cache.get_round_plot_bytes(self.mouse_id, asset_name, plot_type)
+        if data is None:
+            self._round_full_img_pane.object = None
+            self._round_meta_strip.object = "*Image not available.*"
+            return
+        self._round_full_img_pane.object = BytesIO(data)
+        meta = catalog.load_round_plot_metadata(self.mouse_id, asset_name, plot_type)
+        if meta:
+            created = meta.get("created_at", "?")
+            version = meta.get("aind_hcr_qc_version", "?")
+            label = plot_type.replace("_", " ")
+            self._round_meta_strip.object = (
+                f"*{label} · created {created} · v{version}*"
+            )
+        else:
+            self._round_meta_strip.object = ""
+
+    # ---- end round-plots tab -------------------------------------------
 
     def _rebuild_grid(self) -> None:
         """Rebuild the plot-type card grid for the current mouse."""
@@ -377,7 +657,8 @@ class SingleMouseTab(pn.viewable.Viewer):
             sizing_mode="stretch_width",
         )
         inner_tabs = pn.Tabs(
-            ("QC Plots", qc_plots_col),
+            ("Integrated Plots", qc_plots_col),
+            ("Round Plots", self._rounds_main_col),
             ("Neuroglancer Links", pn.Column(self._ng_links_content, sizing_mode="stretch_width")),
             dynamic=True,
             sizing_mode="stretch_width",

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import panel as pn
 
+from hcr_quick_viewer import __version__
 from hcr_quick_viewer.viz_server import catalog, image_cache
 from hcr_quick_viewer.viz_server.tabs.single_mouse import SingleMouseTab
 from hcr_quick_viewer.viz_server.tabs.compare import CompareTab
@@ -81,7 +82,7 @@ refresh_btn.on_click(_on_refresh)
 # -- template --------------------------------------------------------------
 
 template = pn.template.FastListTemplate(
-    title="HCR Quick Viewer",
+    title=f"HCR Quick Viewer  v{__version__}",
     sidebar=[sidebar_col],
     main=[tabs],
     header_background="#2b579a",
